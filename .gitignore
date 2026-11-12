@@ -1,0 +1,16 @@
+node_modules/
+.env
+.env.*
+!.env.example
+.DS_Store
+
+# Foundry
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+
+# Next.js
+frontend/.next/
+
+# Build output
+dist/
