@@ -1,27 +1,51 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {BaseTest} from "./Base.t.sol";
+import {Test} from "forge-std/Test.sol";
 import {InvoiceNFT} from "../src/InvoiceNFT.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {IIdentityRegistry} from "../src/erc3643/interfaces/IIdentityRegistry.sol";
 
-contract IdentityRegistryTest is BaseTest {
-    function test_onlyOperatorCanVerify() public {
-        vm.prank(stranger);
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, stranger));
-        registry.setVerified(stranger, true);
+/// @dev The identity registry is mocked with `vm.mockCall`, so this suite
+///      passes before any ERC-3643 code exists. Once Phase 2 is done, swap
+///      the mock for your real IdentityRegistry.
+contract InvoiceNFTTest is Test {
+    InvoiceNFT internal nft;
+    address internal registry = makeAddr("registry");
+    address internal admin = makeAddr("admin");
+    address internal issuer = makeAddr("issuer");
+    address internal alice = makeAddr("alice");
+    address internal verifier;
+    uint256 internal verifierKey;
+
+    uint256 internal constant FACE = 10_000e6;
+    uint64 internal dueDate;
+
+    function setUp() public {
+        (verifier, verifierKey) = makeAddrAndKey("verifier");
+        nft = new InvoiceNFT(IIdentityRegistry(registry), verifier, admin);
+        dueDate = uint64(block.timestamp + 60 days);
+        _setVerified(issuer, true);
     }
 
-    function test_verificationCanBeRevoked() public {
-        vm.prank(admin);
-        registry.setVerified(alice, false);
-        assertFalse(registry.isVerified(alice));
+    function _setVerified(address wallet, bool ok) internal {
+        vm.mockCall(registry, abi.encodeCall(IIdentityRegistry.isVerified, (wallet)), abi.encode(ok));
     }
-}
 
-contract InvoiceNFTTest is BaseTest {
+    function _invoice(bytes32 documentHash) internal view returns (InvoiceNFT.Invoice memory) {
+        return InvoiceNFT.Invoice({issuer: issuer, faceValue: FACE, dueDate: dueDate, documentHash: documentHash});
+    }
+
+    function _sign(InvoiceNFT.Invoice memory data, uint256 key) internal view returns (bytes memory) {
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(key, nft.hashInvoice(data));
+        return abi.encodePacked(r, s, v);
+    }
+
     function test_mintWithVerifierSignature() public {
-        uint256 id = _mintInvoice();
+        InvoiceNFT.Invoice memory data = _invoice(keccak256("invoice-001.pdf"));
+        bytes memory sig = _sign(data, verifierKey);
+        vm.prank(issuer);
+        uint256 id = nft.mint(data, sig);
+
         assertEq(nft.ownerOf(id), issuer);
         InvoiceNFT.Invoice memory inv = nft.getInvoice(id);
         assertEq(inv.faceValue, FACE);
@@ -40,19 +64,20 @@ contract InvoiceNFTTest is BaseTest {
     function test_revertWhen_fieldsChangedAfterSigning() public {
         InvoiceNFT.Invoice memory data = _invoice(keccak256("a"));
         bytes memory sig = _sign(data, verifierKey);
-        data.faceValue = FACE * 10; // issuer inflates the amount
+        data.faceValue = FACE * 10;
         vm.prank(issuer);
         vm.expectRevert(InvoiceNFT.InvalidSignature.selector);
         nft.mint(data, sig);
     }
 
     function test_revertWhen_sameDocumentMintedTwice() public {
-        _mintInvoice();
-        InvoiceNFT.Invoice memory data = _invoice(keccak256("invoice-001.pdf"));
+        InvoiceNFT.Invoice memory data = _invoice(keccak256("a"));
         bytes memory sig = _sign(data, verifierKey);
-        vm.prank(issuer);
+        vm.startPrank(issuer);
+        nft.mint(data, sig);
         vm.expectRevert(InvoiceNFT.DocumentAlreadyUsed.selector);
         nft.mint(data, sig);
+        vm.stopPrank();
     }
 
     function test_revertWhen_callerIsNotIssuer() public {
@@ -63,11 +88,10 @@ contract InvoiceNFTTest is BaseTest {
         nft.mint(data, sig);
     }
 
-    function test_revertWhen_issuerLosesKyc() public {
+    function test_revertWhen_issuerNotVerified() public {
         InvoiceNFT.Invoice memory data = _invoice(keccak256("a"));
         bytes memory sig = _sign(data, verifierKey);
-        vm.prank(admin);
-        registry.setVerified(issuer, false);
+        _setVerified(issuer, false);
         vm.prank(issuer);
         vm.expectRevert(InvoiceNFT.IssuerNotVerified.selector);
         nft.mint(data, sig);

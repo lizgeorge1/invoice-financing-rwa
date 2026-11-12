@@ -9,3 +9,11 @@ remappings = [
     "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
     "forge-std/=lib/forge-std/src/",
 ]
+
+# Skeleton phase only: empty function bodies trigger "unused parameter",
+# "can be restricted to pure" and "unreachable code" warnings. Delete this
+# line once you have implemented the contracts.
+ignored_error_codes = [5667, 2018, 5740]
+
+[lint]
+lint_on_build = false
