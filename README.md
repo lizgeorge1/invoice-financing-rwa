@@ -1,26 +1,45 @@
 # Invoice Financing RWA
 
-A learning MVP for real-world asset tokenization. A verified business
-tokenizes an unpaid invoice, KYC'd investors fund it at a discount in
-stablecoin, and investors are repaid with yield when the debtor pays.
+A project for learning ERC-3643 (T-REX), the permissioned-token standard for
+real-world assets, by building it. The use case: a verified business
+tokenizes an unpaid invoice, eligible investors fund it at a discount in
+stablecoin and receive ERC-3643 share tokens, and they are repaid with yield
+when the debtor pays.
+
+**Start here: [LEARNING_PATH.md](LEARNING_PATH.md).**
+
+The ERC-3643 contracts are a skeleton: interfaces, storage, events and
+function signatures match the standard, and every body is a numbered TODO
+for you to write.
 
 ## Layout
 
 | Folder | What | Status |
 |---|---|---|
-| `contracts/` | Foundry project: registry, invoice NFT, funding pool | Scaffolded, 3 TODOs |
-| `backend/` | TypeScript: KYC, verifier attestation, settlement oracle, indexer | Placeholder |
-| `frontend/` | Next.js: issuer, investor and admin views | Placeholder |
+| `contracts/src/erc3643/` | ONCHAINID, registries, compliance, token | Skeleton, phases 1 to 5 |
+| `contracts/src/` | Invoice NFT, funding pool, share token factory | Written, 3 TODOs (phase 6) |
+| `backend/` | Claim issuer, verifier attestation, settlement oracle, indexer | Placeholder |
+| `frontend/` | Issuer, investor and admin views | Placeholder |
 
 ## Contracts
 
-| Contract | Role | Off-chain party it trusts |
+| Contract | Role | Phase |
 |---|---|---|
-| `IdentityRegistry` | KYC allowlist | KYC operator |
-| `InvoiceNFT` | One ERC-721 per verified invoice (EIP-712 attested) | Verifier |
-| `FundingPool` | Funding rounds, ERC-1155 shares, settlement, default | Settlement oracle |
-| `InvoiceMath` | Discount pricing | none |
-| `MockUSDC` | Testnet stablecoin with a faucet | none |
+| `erc3643/identity/Identity` | Investor's ONCHAINID: keys and claims | 1 |
+| `erc3643/identity/ClaimIssuer` | KYC provider: validates and revokes claims | 1 |
+| `erc3643/roles/AgentRole` | Owner vs agent split | 2 |
+| `erc3643/registry/ClaimTopicsRegistry` | Which claims are required | 2 |
+| `erc3643/registry/TrustedIssuersRegistry` | Whose claims count | 2 |
+| `erc3643/registry/IdentityRegistryStorage` | Wallet -> identity, shared across tokens | 2 |
+| `erc3643/registry/IdentityRegistry` | `isVerified(wallet)` | 2 |
+| `erc3643/compliance/ModularCompliance` | `canTransfer`, fans out to modules | 3 |
+| `erc3643/token/Token` | Permissioned ERC-20: pause, freeze, forced transfer, recovery | 4 |
+| `erc3643/compliance/modules/*` | Country restriction, max balance per investor | 5 |
+| `ShareTokenFactory` | One share token per invoice | 6 |
+| `FundingPool` | Funding rounds, settlement, default | 6 |
+| `InvoiceNFT` | One ERC-721 per verified invoice (EIP-712 attested) | done |
+| `InvoiceMath` | Discount pricing | 6 |
+| `MockUSDC` | Testnet stablecoin with a faucet | done |
 
 Round lifecycle:
 
@@ -30,28 +49,28 @@ Funding ──> Funded ──> Repaid
    └─> Cancelled (deadline missed, investors refunded)
 ```
 
-## Your TODOs
-
-Do them in order. Each has guidance in the source and a spec in
-`contracts/test/Todo.t.sol`.
-
-1. `InvoiceMath.advanceAmount` in `contracts/src/InvoiceMath.sol`: price the invoice.
-2. `FundingPool._claimAmount` in `contracts/src/FundingPool.sol`: split repayments and recoveries.
-3. `FundingPool._update` in `contracts/src/FundingPool.sol`: KYC transfer restrictions.
+## Running
 
 ```bash
-cd contracts
-forge test
+git clone --recurse-submodules https://github.com/lizgeorge1/invoice-financing-rwa.git
 ```
 
-Before any TODO is done, 10 tests pass and 26 fail. TODO 1 alone turns the
-14 failing `FundingPoolTest` tests and 4 `InvoiceMathTest` tests green,
-because opening a round needs a price.
+```bash
+cd contracts && forge test
+```
+
+Right now 7 tests pass (`InvoiceNFT`) and 4 fail (`InvoiceMath`, TODO 6.2).
+There are no ERC-3643 tests yet: writing them is part of each step.
+
+`foundry.toml` silences three compiler warnings that empty function bodies
+trigger. Remove that line when the skeleton is filled in.
 
 ## Known simplifications
 
+- Not a drop-in T-REX: no proxies, no batch functions, simplified ONCHAINID.
+  The full list is at the end of the learning path.
 - One trusted verifier key and one trusted oracle key.
 - Default is final: recoveries after `markDefaulted` are not supported.
 - No legal wrapper. In production an SPV or assignment agreement is what
   makes the token an enforceable claim on the receivable.
-- No platform fee and no secondary market.
+- No platform fee.

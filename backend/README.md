@@ -1,10 +1,10 @@
 # Backend (not started)
 
-Planned TypeScript service. Build it after the contract TODOs are green.
+Planned TypeScript service. Build it after the learning path's contract phases.
 
 | Module | Job | Talks to |
 |---|---|---|
-| KYC | Mock approval, then `IdentityRegistry.setVerified` | Registry (operator key) |
+| Claim issuer | Mock KYC approval, sign an ERC-735 claim over `(identity, topic, data)`, then `registerIdentity` | ClaimIssuer CLAIM key (signing only), Identity Registry (agent key) |
 | Invoices | Upload PDF, store it, compute `documentHash` | IPFS or object storage, Postgres |
 | Verifier | Sign the EIP-712 `Invoice` struct for approved invoices | Verifier key only, no transactions |
 | Oracle | Bank webhook (simulated) -> `FundingPool.settle` | Pool (oracle key, holds stablecoin) |
