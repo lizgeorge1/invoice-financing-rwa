@@ -1,26 +1,30 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {ERC1155} from "@openzeppelin/contracts/token/ERC1155/ERC1155.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {IdentityRegistry} from "./IdentityRegistry.sol";
+import {IIdentityRegistry} from "./erc3643/interfaces/IIdentityRegistry.sol";
+import {IToken} from "./erc3643/interfaces/IToken.sol";
+import {ShareTokenFactory} from "./ShareTokenFactory.sol";
 import {InvoiceNFT} from "./InvoiceNFT.sol";
 import {InvoiceMath} from "./InvoiceMath.sol";
 
 /// @title FundingPool
 /// @notice Runs one funding round per invoice. Investors deposit stablecoin
-///         and receive ERC-1155 shares (token id = invoice id, 1 share per
-///         stablecoin unit deposited). The invoice NFT sits in escrow here.
+///         and receive shares in that invoice's own ERC-3643 token (1 share
+///         per stablecoin unit deposited). The invoice NFT sits in escrow
+///         here. Transfer restrictions live in the share token, not here.
+/// @dev The pool must be an AGENT of every share token: it mints on `fund`
+///      and burns on `refund`/`claim`. ShareTokenFactory sets that up.
 /// @dev Trust assumption: `oracle` only calls `settle` when the debtor has
 ///      really paid off-chain, and funds the call with that money.
 ///
 ///      Lifecycle:  Funding -> Funded -> Repaid
 ///                     |          `----> Defaulted
 ///                     `-> Cancelled (deadline passed, investors refunded)
-contract FundingPool is ERC1155, Ownable, ReentrancyGuard {
+contract FundingPool is Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     enum Status {
@@ -47,11 +51,13 @@ contract FundingPool is ERC1155, Ownable, ReentrancyGuard {
     uint64 public constant GRACE_PERIOD = 15 days;
 
     IERC20 public immutable stablecoin;
-    IdentityRegistry public immutable registry;
+    IIdentityRegistry public immutable registry;
+    ShareTokenFactory public immutable factory;
     InvoiceNFT public immutable invoiceNft;
     address public oracle;
 
     mapping(uint256 invoiceId => Round) public rounds;
+    mapping(uint256 invoiceId => address) public shareToken;
 
     event RoundOpened(
         uint256 indexed invoiceId, address indexed issuer, uint256 fundingTarget, uint64 fundingDeadline
@@ -82,12 +88,17 @@ contract FundingPool is ERC1155, Ownable, ReentrancyGuard {
         _;
     }
 
-    constructor(IERC20 stablecoin_, IdentityRegistry registry_, InvoiceNFT invoiceNft_, address oracle_, address admin)
-        ERC1155("")
-        Ownable(admin)
-    {
+    constructor(
+        IERC20 stablecoin_,
+        IIdentityRegistry registry_,
+        InvoiceNFT invoiceNft_,
+        ShareTokenFactory factory_,
+        address oracle_,
+        address admin
+    ) Ownable(admin) {
         stablecoin = stablecoin_;
         registry = registry_;
+        factory = factory_;
         invoiceNft = invoiceNft_;
         oracle = oracle_;
     }
@@ -102,6 +113,7 @@ contract FundingPool is ERC1155, Ownable, ReentrancyGuard {
     /// @notice Escrow an invoice NFT and open it for funding.
     /// @param annualDiscountBps Annualized discount the issuer offers investors.
     function openRound(uint256 invoiceId, uint256 annualDiscountBps, uint64 fundingDeadline) external onlyVerified {
+        if (rounds[invoiceId].status != Status.None) revert WrongStatus(rounds[invoiceId].status);
         InvoiceNFT.Invoice memory inv = invoiceNft.getInvoice(invoiceId);
         if (msg.sender != inv.issuer || invoiceNft.ownerOf(invoiceId) != msg.sender) revert NotIssuer();
         if (fundingDeadline <= block.timestamp || fundingDeadline >= inv.dueDate) revert InvalidDeadline();
@@ -119,6 +131,7 @@ contract FundingPool is ERC1155, Ownable, ReentrancyGuard {
             status: Status.Funding
         });
 
+        shareToken[invoiceId] = factory.createShareToken(invoiceId);
         invoiceNft.transferFrom(msg.sender, address(this), invoiceId);
         emit RoundOpened(invoiceId, inv.issuer, target, fundingDeadline);
     }
@@ -136,7 +149,7 @@ contract FundingPool is ERC1155, Ownable, ReentrancyGuard {
 
         r.raised += amount;
         stablecoin.safeTransferFrom(msg.sender, address(this), amount);
-        _mint(msg.sender, invoiceId, amount, "");
+        IToken(shareToken[invoiceId]).mint(msg.sender, amount);
         emit Funded(invoiceId, msg.sender, amount);
 
         if (r.raised == r.fundingTarget) {
@@ -161,10 +174,10 @@ contract FundingPool is ERC1155, Ownable, ReentrancyGuard {
     function refund(uint256 invoiceId) external nonReentrant {
         Round storage r = rounds[invoiceId];
         if (r.status != Status.Cancelled) revert WrongStatus(r.status);
-        uint256 shares = balanceOf(msg.sender, invoiceId);
+        uint256 shares = IToken(shareToken[invoiceId]).balanceOf(msg.sender);
         if (shares == 0) revert ZeroAmount();
 
-        _burn(msg.sender, invoiceId, shares);
+        IToken(shareToken[invoiceId]).burn(msg.sender, shares);
         stablecoin.safeTransfer(msg.sender, shares);
         emit Refunded(invoiceId, msg.sender, shares);
     }
@@ -173,11 +186,11 @@ contract FundingPool is ERC1155, Ownable, ReentrancyGuard {
     function claim(uint256 invoiceId) external nonReentrant {
         Round storage r = rounds[invoiceId];
         if (r.status != Status.Repaid && r.status != Status.Defaulted) revert WrongStatus(r.status);
-        uint256 shares = balanceOf(msg.sender, invoiceId);
+        uint256 shares = IToken(shareToken[invoiceId]).balanceOf(msg.sender);
         if (shares == 0) revert ZeroAmount();
 
         uint256 payout = _claimAmount(r, shares);
-        _burn(msg.sender, invoiceId, shares);
+        IToken(shareToken[invoiceId]).burn(msg.sender, shares);
         stablecoin.safeTransfer(msg.sender, payout);
         emit Claimed(invoiceId, msg.sender, shares, payout);
     }
@@ -216,7 +229,7 @@ contract FundingPool is ERC1155, Ownable, ReentrancyGuard {
 
     /// @dev Stablecoin owed to a holder of `shares` in a Repaid or Defaulted round.
     function _claimAmount(Round storage r, uint256 shares) internal view returns (uint256) {
-        // TODO 2 (yours): split the money in the pool between shareholders.
+        // TODO 6.3: split the money in the pool between shareholders.
         //
         // Available to you: r.repaid (stablecoin the oracle settled),
         // r.faceValue, r.fundingTarget (total shares issued), r.status.
@@ -229,30 +242,6 @@ contract FundingPool is ERC1155, Ownable, ReentrancyGuard {
         //    the first claimant and the last. The payout must not depend on
         //    claim order.
         //  - Rounding: the pool must never owe more than it holds.
-        //
-        // Spec: test/Todo.t.sol -> ClaimTest
-        r; shares; // silence unused warnings
-        revert("TODO 2: implement FundingPool._claimAmount");
-    }
-
-    /// @dev Runs on every share mint, burn and transfer.
-    function _update(address from, address to, uint256[] memory ids, uint256[] memory values) internal override {
-        // TODO 3 (yours): enforce transfer restrictions.
-        //
-        // Right now shares can be sent to any wallet, which defeats the KYC
-        // gate on `fund`. Revert with `NotVerified()` when a transfer
-        // involves a wallet the registry has not verified.
-        //
-        // Things to decide:
-        //  - Mints have from == address(0) and burns have to == address(0).
-        //    Should those be checked? (`fund` already checks the investor.)
-        //  - If an investor's KYC is revoked, should they still be able to
-        //    `claim` or `refund` (a burn)? Blocking it freezes their money;
-        //    allowing it lets a sanctioned wallet cash out. Real security
-        //    tokens solve this with a forced-transfer role. Pick one for the
-        //    MVP and leave a comment saying why.
-        //
-        // Spec: test/Todo.t.sol -> TransferRestrictionTest
-        super._update(from, to, ids, values);
+        revert("TODO 6.3: FundingPool._claimAmount");
     }
 }

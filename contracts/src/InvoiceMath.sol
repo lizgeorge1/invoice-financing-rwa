@@ -18,7 +18,7 @@ library InvoiceMath {
         pure
         returns (uint256 advance)
     {
-        // TODO 1 (yours): price the invoice.
+        // TODO 6.2: price the invoice.
         //
         // Use simple (non-compounding) interest, pro-rated over the tenor:
         //   discount = faceValue * rate * (tenor / YEAR)
@@ -31,8 +31,8 @@ library InvoiceMath {
         //    the discount down favour the issuer or the investors, and is
         //    that who you want to favour?
         //
-        // Spec: test/Todo.t.sol -> InvoiceMathTest
+        // Spec: test/InvoiceMath.t.sol
         faceValue; annualDiscountBps; tenor; advance; // silence unused warnings
-        revert("TODO 1: implement InvoiceMath.advanceAmount");
+        revert("TODO 6.2: InvoiceMath.advanceAmount");
     }
 }

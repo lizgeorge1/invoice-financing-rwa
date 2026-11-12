@@ -5,7 +5,7 @@ import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {IdentityRegistry} from "./IdentityRegistry.sol";
+import {IIdentityRegistry} from "./erc3643/interfaces/IIdentityRegistry.sol";
 
 /// @title InvoiceNFT
 /// @notice One token per verified real-world invoice.
@@ -23,7 +23,7 @@ contract InvoiceNFT is ERC721, EIP712, Ownable {
     bytes32 public constant INVOICE_TYPEHASH =
         keccak256("Invoice(address issuer,uint256 faceValue,uint64 dueDate,bytes32 documentHash)");
 
-    IdentityRegistry public immutable registry;
+    IIdentityRegistry public immutable registry;
     address public verifier;
     uint256 public nextTokenId = 1;
 
@@ -42,7 +42,7 @@ contract InvoiceNFT is ERC721, EIP712, Ownable {
     error DocumentAlreadyUsed();
     error InvalidSignature();
 
-    constructor(IdentityRegistry registry_, address verifier_, address admin)
+    constructor(IIdentityRegistry registry_, address verifier_, address admin)
         ERC721("Tokenized Invoice", "INV")
         EIP712("InvoiceNFT", "1")
         Ownable(admin)
